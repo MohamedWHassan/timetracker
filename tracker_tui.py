@@ -169,11 +169,9 @@ def view_month(conn) -> Group:
         graph_str = plt.build()
 
         color = SITE_COLORS[site]
-        graph_text = Text()
-        graph_text.append(f"\n {site}\n", style=f"bold {color}")
-        graph_text.append(graph_str, style=color)
-        graph_text.append("\n")
-        sections.append(graph_text)
+        header = Text(f"\n {site}\n", style=f"bold {color}")
+        graph_text = Text.from_ansi(graph_str)
+        sections.append(Group(header, graph_text))
 
     if len(sections) == 1:
         sections.append(Text("\n  No data for this month yet.\n", style="dim"))
