@@ -2,11 +2,12 @@
 """
 Time Tracker TUI
 Live dashboard with today stats, monthly graphs, and full history.
-Run 'python3 tracker_tui.py' anytime to view your stats.
-Controls: Tab / Shift+Tab to switch views, Ctrl+C to quit.
+Run 'python3 tracker_tui.py' — press Tab to switch views, Ctrl+C to quit.
 """
 
 import calendar
+import os
+import select
 import sqlite3
 import sys
 import termios
@@ -18,7 +19,6 @@ from pathlib import Path
 
 import plotext as plt
 from rich.console import Console, Group
-from rich.live import Live
 from rich.panel import Panel
 from rich.rule import Rule
 from rich.table import Table
@@ -46,7 +46,6 @@ SITE_COLORS = {
     "VSCode":    "green",
 }
 
-# plotext color names
 PLT_COLORS = {
     "YouTube":   "red",
     "Facebook":  "blue",
@@ -69,8 +68,7 @@ def get_today_stats(conn) -> dict:
     return {row[0]: row[1] for row in rows}
 
 
-def get_month_stats(conn) -> dict[str, dict[int, int]]:
-    """Returns {site: {day: seconds}} for the current month."""
+def get_month_stats(conn) -> dict:
     today = date.today()
     prefix = today.strftime("%Y-%m-")
     rows = conn.execute(
@@ -144,18 +142,17 @@ def view_month(conn) -> Group:
     month_name = today.strftime("%B %Y")
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     days = list(range(1, days_in_month + 1))
-
     month_data = get_month_stats(conn)
-    all_sites = list(SITE_LIMITS.keys())
 
-    sections = [Text.from_markup(f"\n[bold]Monthly Overview — {month_name}[/]\n")]
+    sections: list = [Text.from_markup(f"\n[bold]Monthly Overview — {month_name}[/]\n")]
+    has_data = False
 
-    for site in all_sites:
+    for site in SITE_LIMITS:
         site_data = month_data.get(site, {})
-        if not any(site_data.values()):
-            continue
-
         minutes = [round(site_data.get(d, 0) / 60, 1) for d in days]
+        if not any(minutes):
+            continue
+        has_data = True
 
         plt.clf()
         plt.theme("dark")
@@ -166,14 +163,13 @@ def view_month(conn) -> Group:
         plt.ylabel("Minutes")
         plt.xlim(1, days_in_month)
 
-        graph_str = plt.build()
-
         color = SITE_COLORS[site]
-        header = Text(f"\n {site}\n", style=f"bold {color}")
-        graph_text = Text.from_ansi(graph_str)
-        sections.append(Group(header, graph_text))
+        sections.append(Group(
+            Text(f"\n {site}\n", style=f"bold {color}"),
+            Text.from_ansi(plt.build()),
+        ))
 
-    if len(sections) == 1:
+    if not has_data:
         sections.append(Text("\n  No data for this month yet.\n", style="dim"))
 
     return Group(*sections)
@@ -196,12 +192,11 @@ def view_history(conn) -> Group:
         color = "red" if over else SITE_COLORS.get(site, "white")
         date_cell = d if d not in seen_dates else ""
         seen_dates.add(d)
-        limit_cell = fmt_time(limit) if limit else "no limit"
         hist_table.add_row(
             date_cell,
             f"[{color}]{site}[/]",
             f"[{color}]{fmt_time(secs)}[/]",
-            limit_cell,
+            fmt_time(limit) if limit else "no limit",
         )
 
     return Group(
@@ -209,8 +204,6 @@ def view_history(conn) -> Group:
         hist_table,
     )
 
-
-# ── Main display ───────────────────────────────────────────────────────────────
 
 def build_display(conn, current_view: int) -> Panel:
     tabs = Text()
@@ -246,8 +239,6 @@ def build_display(conn, current_view: int) -> Panel:
 # ── Keyboard input ─────────────────────────────────────────────────────────────
 
 def read_keys(current_view_ref: list, stop_event: threading.Event):
-    """Reads keystrokes in a background thread. Tab cycles views."""
-    import select, os
     if not sys.stdin.isatty():
         return
     fd = sys.stdin.fileno()
@@ -261,7 +252,7 @@ def read_keys(current_view_ref: list, stop_event: threading.Event):
             ch = os.read(fd, 4).decode("utf-8", errors="ignore")
             if "\t" in ch:
                 current_view_ref[0] = (current_view_ref[0] + 1) % len(VIEWS)
-            elif "\x03" in ch:  # Ctrl+C
+            elif "\x03" in ch:
                 stop_event.set()
                 break
     except Exception:
@@ -279,7 +270,7 @@ def main():
         return
 
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    current_view = [0]  # mutable ref for thread
+    current_view = [0]
     stop_event = threading.Event()
 
     key_thread = threading.Thread(
@@ -288,16 +279,16 @@ def main():
     key_thread.start()
 
     try:
-        with Live(build_display(conn, current_view[0]), console=console,
-                  refresh_per_second=1, screen=True) as live:
-            while not stop_event.is_set():
-                time.sleep(0.2)
-                live.update(build_display(conn, current_view[0]))
+        while not stop_event.is_set():
+            console.clear()
+            console.print(build_display(conn, current_view[0]))
+            time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
         stop_event.set()
         conn.close()
+        console.clear()
 
 
 if __name__ == "__main__":
