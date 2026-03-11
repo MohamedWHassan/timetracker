@@ -249,15 +249,21 @@ def build_display(conn, current_view: int) -> Panel:
 
 def read_keys(current_view_ref: list, stop_event: threading.Event):
     """Reads keystrokes in a background thread. Tab cycles views."""
+    import select, os
+    if not sys.stdin.isatty():
+        return
     fd = sys.stdin.fileno()
     old = termios.tcgetattr(fd)
     try:
         tty.setraw(fd)
         while not stop_event.is_set():
-            ch = sys.stdin.read(1)
-            if ch == "\t":  # Tab
+            ready, _, _ = select.select([fd], [], [], 0.2)
+            if not ready:
+                continue
+            ch = os.read(fd, 4).decode("utf-8", errors="ignore")
+            if "\t" in ch:
                 current_view_ref[0] = (current_view_ref[0] + 1) % len(VIEWS)
-            elif ch == "\x03":  # Ctrl+C
+            elif "\x03" in ch:  # Ctrl+C
                 stop_event.set()
                 break
     except Exception:
