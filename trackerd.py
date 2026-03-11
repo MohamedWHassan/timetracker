@@ -17,9 +17,16 @@ from pathlib import Path
 
 DB_PATH = Path.home() / ".timetracker.db"
 PORT = 27182
-LIMIT_SECONDS = 30 * 60  # 30 minutes
 
-TRACKED_SITES = ["YouTube", "Facebook", "Instagram"]
+# None means no limit
+SITE_LIMITS = {
+    "YouTube":   30 * 60,
+    "Facebook":  30 * 60,
+    "Instagram": 30 * 60,
+    "VSCode":    None,
+}
+
+TRACKED_SITES = list(SITE_LIMITS.keys())
 
 logging.basicConfig(
     level=logging.INFO,
@@ -76,12 +83,15 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             return
         stats = get_today_stats(conn)
-        blocked = [site for site, secs in stats.items() if secs >= LIMIT_SECONDS]
+        blocked = [
+            site for site, secs in stats.items()
+            if SITE_LIMITS.get(site) is not None and secs >= SITE_LIMITS[site]
+        ]
         self.send_response(200)
         self._cors()
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"blocked": blocked, "limit": LIMIT_SECONDS}).encode())
+        self.wfile.write(json.dumps({"blocked": blocked}).encode())
 
     def do_POST(self):
         if self.path != "/heartbeat":

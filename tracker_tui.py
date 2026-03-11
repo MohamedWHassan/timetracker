@@ -19,14 +19,25 @@ from rich.text import Text
 from rich import box
 
 DB_PATH = Path.home() / ".timetracker.db"
-LIMIT_SECONDS = 30 * 60
 
-TRACKED_SITES = ["YouTube", "Facebook", "Instagram"]
+# None = no limit
+SITE_LIMITS = {
+    "YouTube":   30 * 60,
+    "Facebook":  30 * 60,
+    "Instagram": 30 * 60,
+    "VSCode":    None,
+}
+
+CATEGORIES = {
+    "Work":   ["VSCode"],
+    "Social": ["YouTube", "Facebook", "Instagram"],
+}
 
 SITE_COLORS = {
-    "YouTube": "red",
-    "Facebook": "blue",
+    "YouTube":   "red",
+    "Facebook":  "blue",
     "Instagram": "magenta",
+    "VSCode":    "green",
 }
 
 console = Console()
@@ -62,25 +73,31 @@ def make_bar(secs: int, max_secs: int, width: int = 24) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
+def render_category(label: str, sites: list, stats: dict, max_secs: int) -> Text:
+    t = Text()
+    t.append(f" {label}\n", style="bold dim")
+    for site in sites:
+        secs = stats.get(site, 0)
+        limit = SITE_LIMITS.get(site)
+        over = limit is not None and secs >= limit
+        color = "red" if over else SITE_COLORS[site]
+        bar = make_bar(secs, max_secs)
+        time_str = fmt_time(secs)
+        limit_str = f"/ {fmt_time(limit)}" if limit else "  no limit"
+        warn = "  ⚠ LIMIT — tabs closed" if over else ""
+        t.append(f"  {site:<12}", style=f"bold {color}")
+        t.append(f" {bar} ", style=color)
+        t.append(f"{time_str:>12} ", style=f"bold {color}")
+        t.append(f"{limit_str}", style="dim")
+        t.append(f"{warn}\n", style="bold red")
+    return t
+
+
 def build_display(conn) -> Panel:
     today = str(date.today())
     stats = get_today_stats(conn)
     history = get_history(conn)
     max_secs = max(stats.values(), default=1)
-
-    # Today section
-    today_text = Text()
-    for site in TRACKED_SITES:
-        secs = stats.get(site, 0)
-        over = secs >= LIMIT_SECONDS
-        color = "red" if over else SITE_COLORS[site]
-        bar = make_bar(secs, max_secs)
-        time_str = fmt_time(secs)
-        warn = "  ⚠  LIMIT — tabs closed" if over else ""
-        today_text.append(f"  {site:<12}", style=f"bold {color}")
-        today_text.append(f" {bar} ", style=color)
-        today_text.append(f"{time_str:>12}", style=f"bold {color}")
-        today_text.append(f"{warn}\n", style="bold red")
 
     # History table
     hist_table = Table(box=box.SIMPLE, show_header=True,
@@ -88,29 +105,37 @@ def build_display(conn) -> Panel:
     hist_table.add_column("Date", style="dim", width=12)
     hist_table.add_column("Site", width=12)
     hist_table.add_column("Time Spent", justify="right")
+    hist_table.add_column("Limit", justify="right", style="dim")
 
     seen_dates: set = set()
     for d, site, secs in history[:30]:
-        over = secs >= LIMIT_SECONDS
+        limit = SITE_LIMITS.get(site)
+        over = limit is not None and secs >= limit
         color = "red" if over else SITE_COLORS.get(site, "white")
         date_cell = d if d not in seen_dates else ""
         seen_dates.add(d)
-        hist_table.add_row(date_cell, f"[{color}]{site}[/]",
-                           f"[{color}]{fmt_time(secs)}[/]")
+        limit_cell = fmt_time(limit) if limit else "no limit"
+        hist_table.add_row(
+            date_cell,
+            f"[{color}]{site}[/]",
+            f"[{color}]{fmt_time(secs)}[/]",
+            limit_cell,
+        )
+
+    sections = [Text.from_markup(f"\n[bold]Today  ({today})[/]\n")]
+    for label, sites in CATEGORIES.items():
+        sections.append(render_category(label, sites, stats, max_secs))
+
+    sections += [
+        Rule(style="dim"),
+        Text.from_markup("[bold]History[/]\n"),
+        hist_table,
+        Rule(style="dim"),
+        Text.from_markup("[dim]Press Ctrl+C to quit[/]"),
+    ]
 
     return Panel(
-        Group(
-            Text.from_markup(f"\n[bold]Today  ({today})[/]\n"),
-            today_text,
-            Rule(style="dim"),
-            Text.from_markup("[bold]History[/]\n"),
-            hist_table,
-            Rule(style="dim"),
-            Text.from_markup(
-                f"[dim]Limit: {fmt_time(LIMIT_SECONDS)} per site  •  "
-                f"Press Ctrl+C to quit[/]"
-            ),
-        ),
+        Group(*sections),
         title="[bold white]Website Time Tracker[/]",
         border_style="bright_blue",
         padding=(0, 1),

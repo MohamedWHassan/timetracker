@@ -1,0 +1,10 @@
+{
+  "name": "timetracker",
+  "displayName": "Time Tracker",
+  "description": "Tracks time spent in VS Code and reports to the local time tracker daemon.",
+  "version": "1.0.0",
+  "engines": { "vscode": "^1.75.0" },
+  "activationEvents": ["onStartupFinished"],
+  "main": "./extension.js",
+  "contributes": {}
+}
