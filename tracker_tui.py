@@ -1,23 +1,15 @@
 #!/usr/bin/env python3
 """
 Time Tracker TUI
-Live dashboard with today stats, monthly graphs, and full history.
-Run 'python3 tracker_tui.py' — press Tab to switch views, Ctrl+C to quit.
+Live dashboard. Run 'python3 tracker_tui.py' anytime to view your stats.
+Press Ctrl+C to quit.
 """
 
-import calendar
-import os
-import select
 import sqlite3
-import sys
-import termios
-import threading
 import time
-import tty
 from datetime import date
 from pathlib import Path
 
-import plotext as plt
 from rich.console import Console, Group
 from rich.panel import Panel
 from rich.rule import Rule
@@ -46,19 +38,8 @@ SITE_COLORS = {
     "VSCode":    "green",
 }
 
-PLT_COLORS = {
-    "YouTube":   "red",
-    "Facebook":  "blue",
-    "Instagram": "magenta+",
-    "VSCode":    "green",
-}
-
-VIEWS = ["Today", "Month", "History"]
-
 console = Console()
 
-
-# ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def get_today_stats(conn) -> dict:
     today = str(date.today())
@@ -68,27 +49,11 @@ def get_today_stats(conn) -> dict:
     return {row[0]: row[1] for row in rows}
 
 
-def get_month_stats(conn) -> dict:
-    today = date.today()
-    prefix = today.strftime("%Y-%m-")
-    rows = conn.execute(
-        "SELECT site, date, seconds FROM sessions WHERE date LIKE ?",
-        (prefix + "%",),
-    ).fetchall()
-    result: dict[str, dict[int, int]] = {}
-    for site, d, secs in rows:
-        day = int(d.split("-")[2])
-        result.setdefault(site, {})[day] = secs
-    return result
-
-
 def get_history(conn) -> list:
     return conn.execute(
         "SELECT date, site, seconds FROM sessions ORDER BY date DESC, site"
     ).fetchall()
 
-
-# ── Formatting ─────────────────────────────────────────────────────────────────
 
 def fmt_time(seconds: int) -> str:
     h = seconds // 3600
@@ -106,13 +71,13 @@ def make_bar(secs: int, max_secs: int, width: int = 24) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-# ── Views ──────────────────────────────────────────────────────────────────────
-
-def view_today(conn) -> Group:
+def build_display(conn) -> Panel:
     today = str(date.today())
     stats = get_today_stats(conn)
+    history = get_history(conn)
     max_secs = max(stats.values(), default=1)
 
+    # Today section
     sections = [Text.from_markup(f"\n[bold]Today  ({today})[/]\n")]
 
     for label, sites in CATEGORIES.items():
@@ -134,50 +99,7 @@ def view_today(conn) -> Group:
             t.append(f"{warn}\n", style="bold red")
         sections.append(t)
 
-    return Group(*sections)
-
-
-def view_month(conn) -> Group:
-    today = date.today()
-    month_name = today.strftime("%B %Y")
-    days_in_month = calendar.monthrange(today.year, today.month)[1]
-    days = list(range(1, days_in_month + 1))
-    month_data = get_month_stats(conn)
-
-    sections: list = [Text.from_markup(f"\n[bold]Monthly Overview — {month_name}[/]\n")]
-    has_data = False
-
-    for site in SITE_LIMITS:
-        site_data = month_data.get(site, {})
-        minutes = [round(site_data.get(d, 0) / 60, 1) for d in days]
-        if not any(minutes):
-            continue
-        has_data = True
-
-        plt.clf()
-        plt.theme("dark")
-        plt.plotsize(60, 12)
-        plt.bar(days, minutes, color=PLT_COLORS.get(site, "white"))
-        plt.title(site)
-        plt.xlabel("Day of month")
-        plt.ylabel("Minutes")
-        plt.xlim(1, days_in_month)
-
-        color = SITE_COLORS[site]
-        sections.append(Group(
-            Text(f"\n {site}\n", style=f"bold {color}"),
-            Text.from_ansi(plt.build()),
-        ))
-
-    if not has_data:
-        sections.append(Text("\n  No data for this month yet.\n", style="dim"))
-
-    return Group(*sections)
-
-
-def view_history(conn) -> Group:
-    history = get_history(conn)
-
+    # History table
     hist_table = Table(box=box.SIMPLE, show_header=True,
                        header_style="bold cyan", expand=True)
     hist_table.add_column("Date", style="dim", width=12)
@@ -199,69 +121,21 @@ def view_history(conn) -> Group:
             fmt_time(limit) if limit else "no limit",
         )
 
-    return Group(
-        Text.from_markup("\n[bold]Full History[/]\n"),
+    sections += [
+        Rule(style="dim"),
+        Text.from_markup("[bold]History[/]\n"),
         hist_table,
-    )
-
-
-def build_display(conn, current_view: int) -> Panel:
-    tabs = Text()
-    for i, name in enumerate(VIEWS):
-        if i == current_view:
-            tabs.append(f" [{name}] ", style="bold white on bright_blue")
-        else:
-            tabs.append(f"  {name}  ", style="dim")
-        if i < len(VIEWS) - 1:
-            tabs.append(" ")
-
-    if current_view == 0:
-        content = view_today(conn)
-    elif current_view == 1:
-        content = view_month(conn)
-    else:
-        content = view_history(conn)
+        Rule(style="dim"),
+        Text.from_markup("[dim]Ctrl+C to quit[/]"),
+    ]
 
     return Panel(
-        Group(
-            tabs,
-            Rule(style="dim"),
-            content,
-            Rule(style="dim"),
-            Text.from_markup("[dim]Tab: next view  •  Ctrl+C: quit[/]"),
-        ),
+        Group(*sections),
         title="[bold white]Website Time Tracker[/]",
         border_style="bright_blue",
         padding=(0, 1),
     )
 
-
-# ── Keyboard input ─────────────────────────────────────────────────────────────
-
-def read_keys(current_view_ref: list, stop_event: threading.Event):
-    if not sys.stdin.isatty():
-        return
-    fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
-    try:
-        tty.setraw(fd)
-        while not stop_event.is_set():
-            ready, _, _ = select.select([fd], [], [], 0.2)
-            if not ready:
-                continue
-            ch = os.read(fd, 4).decode("utf-8", errors="ignore")
-            if "\t" in ch:
-                current_view_ref[0] = (current_view_ref[0] + 1) % len(VIEWS)
-            elif "\x03" in ch:
-                stop_event.set()
-                break
-    except Exception:
-        pass
-    finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
-
-
-# ── Entry point ────────────────────────────────────────────────────────────────
 
 def main():
     if not DB_PATH.exists():
@@ -270,23 +144,14 @@ def main():
         return
 
     conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
-    current_view = [0]
-    stop_event = threading.Event()
-
-    key_thread = threading.Thread(
-        target=read_keys, args=(current_view, stop_event), daemon=True
-    )
-    key_thread.start()
-
     try:
-        while not stop_event.is_set():
+        while True:
             console.clear()
-            console.print(build_display(conn, current_view[0]))
+            console.print(build_display(conn))
             time.sleep(1)
     except KeyboardInterrupt:
         pass
     finally:
-        stop_event.set()
         conn.close()
         console.clear()
 
