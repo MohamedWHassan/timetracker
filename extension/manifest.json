@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Time Tracker",
+  "version": "1.0",
+  "description": "Tracks time spent on YouTube, Facebook, and Instagram",
+  "permissions": [
+    "tabs",
+    "alarms",
+    "http://127.0.0.1:27182/*"
+  ],
+  "background": {
+    "scripts": ["background.js"],
+    "persistent": false
+  }
+}
